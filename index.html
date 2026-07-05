@@ -326,16 +326,13 @@
           <option value="">Any status</option>
           <option value="CD">Central Deputation</option>
           <option value="F.A.">Foreign Assignment</option>
-          <option value="__none">State cadre (no CD/FA)</option>
+          <option value="__none">In Cadre (no CD/FA)</option>
         </select></div>
       <div class="field"><label for="fBucket">Place of posting</label>
         <select id="fBucket">
           <option value="">Anywhere</option>
           <option value="outside_delhi">Outside Delhi</option>
           <option value="in_delhi">In Delhi</option>
-          <option value="borderline">Borderline — verify</option>
-          <option value="no_city">No city stated</option>
-          <option value="abroad">Posted abroad</option>
         </select></div>
       <div class="field"><label for="fCity">City</label>
         <select id="fCity"><option value="">All cities</option></select></div>
@@ -367,11 +364,13 @@
             <th data-sort="cadre">Cadre</th>
             <th data-sort="pay_level">Level</th>
             <th data-sort="status">Deputation Status</th>
+            <th data-sort="cd_since">On CD Since</th>
             <th data-sort="city">Place of posting</th>
             <th data-sort="dob">Date of Birth</th>
             <th data-sort="dor">Date of Retirement</th>
             <th data-sort="batch_year">Batch</th>
             <th data-sort="source">Source</th>
+            <th data-sort="education">Education</th>
             <th data-sort="page">Page Number</th>
             <th data-sort="posting">Posting</th>
           </tr></thead>
@@ -427,7 +426,7 @@
   <footer>
     <div class="rule"></div>
     <div>OCR source — verify any record against its cited Civil List page before official use. Locations marked <span class="basis infer">inferred</span> (institution/cadre fallback, no printed city) warrant extra care.</div>
-    <div style="margin-top:6px;color:var(--faint)">Build 2026-07-05-c</div>
+    <div style="margin-top:6px;color:var(--faint)">Build 2026-07-05-g</div>
   </footer>
 </div>
 
@@ -666,9 +665,16 @@ const CENSUS_DELHI_HQ = [/Registrar General/i, /Census Commissioner of India/i, 
 // (Embassy/High Commission/Consulate/Permanent Mission) name their actual host
 // city in the posting -- resolved here instead of falling through to the
 // domestic Delhi/cadre-capital fallback, which would be wrong for these.
-const FOREIGN_MISSION_MARKERS = [/Embassy of India/i, /High Commission of India/i,
-  /Consulate General of India/i, /Permanent Mission of India/i, /Indian Embassy/i,
-  /Indian High Commission/i, /Indian Consulate/i, /Deputation abroad/i];
+// Whitespace between words is \s+, not a literal space -- column-layout
+// padding in the raw block text can put multiple spaces or even a line
+// break between two words of an otherwise-contiguous phrase (this is what
+// was silently breaking foreign-status detection for at least one officer:
+// his posting text -- already whitespace-normalized -- read "Embassy of
+// India" correctly, but the RAW text these patterns are matched against
+// preserves the source's column spacing as-is).
+const FOREIGN_MISSION_MARKERS = [/Embassy\s+of\s+India/i, /High\s+Commission\s+of\s+India/i,
+  /Consulate\s+General\s+of\s+India/i, /Permanent\s+Mission\s+of\s+India/i, /Indian\s+Embassy/i,
+  /Indian\s+High\s+Commission/i, /Indian\s+Consulate/i, /Deputation\s+abroad/i];
 // Cities where India commonly posts IFS/IAS officers on foreign assignment --
 // not exhaustive (India has missions in ~200 countries), but covers the large
 // majority of postings. Anything not in this list still gets flagged "abroad"
@@ -714,6 +720,21 @@ const DISTRICT_POST_TITLES = /(?:Collector|District Magistrate|Deputy Commission
 // interleaving issue behind the date-in-the-middle-of-"Level N" bug) --
 // stripped out of extracted place names wherever they appear.
 const DEGREE_RE = /\b(?:[BM]\.?\s?(?:A|Sc|Com|E|Ed|Tech|H\.?M\.?S)\.?|LL\.?\s?[BM]\.?|MBA|Ph\.?\s?D\.?|M\.?\s?Phil\.?)\b\.?/gi;
+// Full academic qualification, including its parenthetical specialisation
+// where present (e.g. "B.Tech.(Mech. Engg.)", "M.A.(Political Sc.)") -- for
+// the Education column, and for stripping qualification text that leaks
+// into the reconstructed posting/city text via the same column-interleaving
+// issue behind the Level/date bug. Ordered longest/most-specific first so a
+// longer abbreviation (e.g. M.B.B.S.) isn't partially matched by a shorter
+// one (e.g. B.S.). Deliberately does NOT match a bare honorific parenthetical
+// like "Dr.(Ms.)", which has no qualification keyword before the parens.
+// Case-sensitive with a required leading word boundary and a REQUIRED period
+// between the two letters of the short/ambiguous abbreviations (B.A, M.A,
+// B.E, M.E, B.L) -- without both of those, this matched and stripped "Ma"/
+// "Be"/"ba" etc. out of the MIDDLE of ordinary words case-insensitively
+// (e.g. "Matrix" -> "trix", "Bengaluru" -> "ngaluru", "Government" ->
+// "Governnt"), corrupting posting text rather than cleaning it.
+const QUALIFICATION_RE = /\b(?:M\.B\.?B\.?S\.?|M\.B\.?A\.?|LL\.?M\.?|LL\.?B\.?|Ph\.?D\.?|M\.?Phil\.?|B\.?Tech\.?|M\.?Tech\.?|B\.?Sc\.?|M\.?Sc\.?|B\.?Com\.?|M\.?Com\.?|B\.A\.?|M\.A\.?|B\.E\.?|M\.E\.?|B\.L\.?)(?:\s*\([^)]*\))?/g;
 const CADRE_FALLBACK_MARKERS = [/Census Operations/i, /Census/i, /Resident Commissioner/i, ...STATE_SECRETARIAT_TITLES];
 const KNOWN_CITIES = {"mussoorie":"Mussoorie","mumbai":"Mumbai","bengaluru":"Bengaluru","bangalore":"Bengaluru",
   "chennai":"Chennai","kolkata":"Kolkata","chandigarh":"Chandigarh","coonoor":"Coonoor","lucknow":"Lucknow",
@@ -722,7 +743,8 @@ const KNOWN_CITIES = {"mussoorie":"Mussoorie","mumbai":"Mumbai","bengaluru":"Ben
   "gandhinagar":"Gandhinagar","bhopal":"Bhopal","jaipur":"Jaipur","patna":"Patna","guwahati":"Guwahati",
   "raipur":"Raipur","bhubaneswar":"Bhubaneswar","thiruvananthapuram":"Thiruvananthapuram","shimla":"Shimla",
   "panaji":"Panaji","shillong":"Shillong","imphal":"Imphal","aizawl":"Aizawl","kohima":"Kohima",
-  "agartala":"Agartala","itanagar":"Itanagar","gangtok":"Gangtok","amaravati":"Amaravati"};
+  "agartala":"Agartala","itanagar":"Itanagar","gangtok":"Gangtok","amaravati":"Amaravati",
+  "new delhi":"Delhi","delhi":"Delhi"};
 const DELHI_HQ_MARKERS = [/M\/o\b/,/Ministry of/,/Department of .*, New Delhi/,/New Delhi/,/\bDelhi\b/,
   /Registrar General/,/Cabinet Secretariat/,/PMO/,/NITI Aayog/,/Rashtrapati Bhavan/];
 const STATE_CADRE_HINTS = [/Govt\.? of [A-Z]/,/Government of [A-Z]/,/working in .* state/,/Collector,/,
@@ -804,14 +826,18 @@ function rightmostPosting(line, minCol=40){
   if(!txt || STATE_FRAGMENTS.has(txt)) return "";
   return txt;
 }
-function statusOf(raw){
+function statusOf(raw, posting){
   // A posting at an Indian mission abroad is, from a status standpoint, a
   // Foreign Assignment -- checked first and with priority over the generic
   // "On CD" marker, since the source document tags these officers CD too
   // (foreign postings ARE technically a form of central deputation), which
   // otherwise made "Deputation status = Foreign Assignment" return nothing:
-  // every genuine case was showing as CD instead.
-  if(FOREIGN_MISSION_MARKERS.some(p=>p.test(raw))) return "F.A.";
+  // every genuine case was showing as CD instead. Checked against BOTH the
+  // raw block text AND the already-reconstructed posting text: column
+  // interleaving can put other columns' content between two words of an
+  // otherwise-contiguous phrase in raw (the same issue behind the Level/
+  // date bug), which the posting reconstruction already bridges.
+  if(FOREIGN_MISSION_MARKERS.some(p=>p.test(raw)||(posting&&p.test(posting)))) return "F.A.";
   for(const [label,pats] of STATUS_MARKERS){ if(pats.some(p=>p.test(raw))) return label; }
   return null;
 }
@@ -849,6 +875,16 @@ function resolveLocation(posting, cadre, status){
     }
   }
   for(const tok in KNOWN_CITIES){ if(new RegExp("\\b"+tok+"\\b").test(low)) return [KNOWN_CITIES[tok], "city"]; }
+  // Unambiguous central-ministry language ("M/o", "Ministry of", "Govt. of
+  // India") means Delhi -- checked here, ahead of the generic state-name
+  // fallbacks below, because a CD officer's posting very often ALSO mentions
+  // their home cadre state in passing (e.g. trailing cadre context at the
+  // end of the line), which would otherwise wrongly win as "the" location
+  // even though the officer is actually working at the ministry in Delhi.
+  // Deliberately excludes bare "D/o" alone: state governments also use
+  // "Department of <X>" phrasing, so that marker alone isn't a reliable
+  // signal of central (vs state) context without one of these alongside it.
+  if(/\bM\/o\b|Ministry of|Govt\.?\s+of\s+India|Government of India/i.test(posting)) return ["Delhi", "inferred:central"];
   // District-level posts (Collector, District Magistrate, SDM, Deputy Commissioner,
   // Zila Panchayat CEO, Divisional/Municipal Commissioner, etc.) are state-cadre
   // roles that name their own district/town directly in the posting -- extract that
@@ -928,28 +964,17 @@ function resolveLocation(posting, cadre, status){
   if(cadre && CADRE_CAPITAL[cadre]) return [CADRE_CAPITAL[cadre], "inferred:cadre-default"];
   return [null, "none"];
 }
+// Simplified to the two options that matter: every officer's city is always
+// resolved now (never null -- the final catch-all guarantees Delhi or a
+// cadre-default capital), so location comes down to Delhi or not. Foreign
+// postings fold into "outside_delhi" too (they're clearly not in Delhi;
+// their foreign-ness is now visible via Deputation Status = F.A. and the
+// City field itself, e.g. "Brussels"). The former cross-cadre "borderline"
+// conflict signal isn't lost -- it's still visible via the location basis
+// ("govt-of:<state>") in the row detail -- it just isn't a separate bucket.
 function classify(o){
-  const posting=o.posting;
-  if(o.status==="F.A." || /Foreign Assignment/i.test(posting) || FOREIGN_MISSION_MARKERS.some(p=>p.test(posting))) return "abroad";
-  const city=o.city;
-  const isDelhi=(!city && DELHI_HQ_MARKERS.some(p=>p.test(posting))) || (city && city.toLowerCase()==="delhi");
-  // "Borderline" is reserved for a genuine, checkable conflict: the officer IS
-  // flagged Central Deputation, AND the location was resolved via an explicit
-  // "Govt. of <State>" mention naming a DIFFERENT state than their own cadre --
-  // a real cross-cadre anomaly worth a second look. Same-state ("Principal
-  // Secretary to Govt. of UP" for a UP-cadre officer) is routine state service,
-  // not a conflict, even though it happens to also carry a CD tag; flagging it
-  // produced false positives, so only the cross-cadre case counts now.
-  let conflicted = false;
-  if(o.status==="CD" && o.basis && o.basis.startsWith("govt-of:")){
-    const namedState = o.basis.slice(8).replace(/\s+/g,"").toUpperCase();
-    const ownCadre = (o.cadre||"").replace(/\s+/g,"").toUpperCase();
-    if(namedState && ownCadre && namedState!==ownCadre) conflicted = true;
-  }
-  if(city && !["delhi","new delhi"].includes(city.toLowerCase())) return conflicted ? "borderline" : "outside_delhi";
-  if(isDelhi) return "in_delhi";
-  if(conflicted) return "borderline";
-  return "no_city";
+  const city=(o.city||"").toLowerCase();
+  return (city==="delhi"||city==="new delhi") ? "in_delhi" : "outside_delhi";
 }
 
 /* reconstruct a pdftotext-layout-like line string from positioned items */
@@ -1048,6 +1073,15 @@ async function parsePdf(file, onProgress, onBuild){
       const bm=b.text.match(BATCH_RE); if(bm && batch_year===null) batch_year=+bm[1];
     }
     if(batch_year===null) batch_year=allotAt[start];
+    // Two known placeholder/garbled ID-code date years, confirmed against
+    // the actual document: "01/01/1900" is the government database's own
+    // placeholder for very newly recruited officers whose permanent
+    // allotment record isn't finalised yet (all such cases here are 2025-
+    // batch trainees); "2100" is an OCR transposition of "2020" (the one
+    // case here is a 2020-batch SCS promotion, correctly age-consistent
+    // once fixed).
+    if(batch_year===1900) batch_year=2025;
+    else if(batch_year===2100) batch_year=2020;
     const raw=block.map(b=>b.text).join("\n");
     // Date of birth: reliably the FIRST standalone date encountered reading
     // the block top-to-bottom (it sits on the officer's name/qualification
@@ -1097,8 +1131,27 @@ async function parsePdf(file, onProgress, onBuild){
     // exact line equality, so trailing content doesn't hide it.
     let source=null;
     for(const b of block){ const m=b.text.match(/^\s*(DR|SCS)\b/); if(m){ source=m[1]; break; } }
+    // Education: qualification(s) appear on the block's early lines, in the
+    // same column region as DOB/DOR, before the ID-code line -- collect
+    // every match found there and join them ("B.Tech.(Mech. Engg.)" or
+    // "B.A., LL.B." for two). Separately, qualification text also leaks INTO
+    // the reconstructed posting/location fields via the same column-
+    // interleaving issue behind the Level/date bug (e.g. "Level B.Tech. 12
+    // in the Pay Matrix") -- stripped out of posting below once it's been
+    // captured here.
+    let education=null;
+    { const idm2=IDCODE_RE.exec(raw); IDCODE_RE.lastIndex=0;
+      const beforeId = idm2 ? raw.slice(0,idm2.index) : raw;
+      QUALIFICATION_RE.lastIndex=0;
+      const quals=[...beforeId.matchAll(QUALIFICATION_RE)].map(m=>m[0].trim()).filter(Boolean);
+      if(quals.length) education=[...new Set(quals)].join(", ");
+    }
     let parts=[]; for(const b of block){ const seg=rightmostPosting(b.text); if(seg) parts.push(seg); }
-    const posting=parts.join(" ").replace(/\s{2,}/g," ").trim();
+    let posting=parts.join(" ").replace(/\s{2,}/g," ").trim();
+    if(education){
+      QUALIFICATION_RE.lastIndex=0;
+      posting=posting.replace(QUALIFICATION_RE,"").replace(/\s{2,}/g," ").trim();
+    }
     // Level extraction: try the raw block text first, but multi-column layouts
     // sometimes interleave other column content between "Level" and its number
     // across lines, breaking a contiguous match there even though the already-
@@ -1109,10 +1162,21 @@ async function parsePdf(file, onProgress, onBuild){
     LEVEL_RE.lastIndex=0;
     while((lm=LEVEL_RE.exec(posting))) levels.push(+lm[1]);
     const pay_level=levels.length?Math.max(...levels):null;
-    const status=statusOf(raw);
+    const status=statusOf(raw,posting);
+    // "On CD Since <date>": the date an officer's current central deputation
+    // began. Only meaningful for officers actually flagged CD; state-cadre
+    // officers (no CD/F.A. status) show "NA" rather than being left blank,
+    // since there's no such date to have.
+    let cd_since=null;
+    if(status==="CD"){
+      const m=raw.match(/On\s+(?:C\.?D\.?|Central\s+Deputation)\.?\s+Since\s+(\d{2}[\/.]\d{2}[\/.]\d{4})/i);
+      cd_since = m ? m[1] : null;
+    } else if(status==null){
+      cd_since="NA";
+    }
     const [city,basis]=resolveLocation(posting,cadre,status);
     const [role_tier,ministry]=parseRoleMinistry(posting);
-    const o={serial,name,idcode,page,cadre,pay_level,status,batch_year,dob,dor,source,role_tier,ministry,posting,city,basis};
+    const o={serial,name,idcode,page,cadre,pay_level,status,batch_year,dob,dor,source,education,cd_since,role_tier,ministry,posting,city,basis};
     o.bucket=classify(o);
     officers.push(o);
     // This loop does several regex passes per officer and is 100% synchronous
@@ -1187,7 +1251,7 @@ function inferMissingLevel(officers){
 const $=s=>document.querySelector(s);
 let DATA=null, SORT={key:"pay_level",dir:-1}, OPENID=null;
 
-const BUCKET_LABEL={outside_delhi:"Outside Delhi",in_delhi:"In Delhi",borderline:"Borderline",no_city:"No city",abroad:"Abroad"};
+const BUCKET_LABEL={outside_delhi:"Outside Delhi",in_delhi:"In Delhi"};
 
 function fmtSize(b){ return b>1e6 ? (b/1e6).toFixed(1)+" MB" : Math.round(b/1e3)+" KB"; }
 
@@ -1309,7 +1373,7 @@ function applyFilters(){
 }
 function sortRows(rows){
   const {key,dir}=SORT;
-  const isDateKey = key==="dob"||key==="dor";
+  const isDateKey = key==="dob"||key==="dor"||key==="cd_since";
   const toSortableDate = v=>{
     if(!v) return null;
     const m=v.match(/^(\d{2})[\/.](\d{2})[\/.](\d{4})$/);
@@ -1362,7 +1426,7 @@ async function render(){
     for(const o of matched.slice(i,i+CHUNK)){
       const tr=document.createElement("tr");
       tr.className="rowline"+(OPENID===o.serial+"|"+o.page?" open":"");
-      const stat=o.status==="CD"?`<span class="pill cd">CD</span>`:o.status==="F.A."?`<span class="pill fa">F.A.</span>`:`<span class="mono-cell" style="color:var(--faint)">—</span>`;
+      const stat=o.status==="CD"?`<span class="pill cd">CD</span>`:o.status==="F.A."?`<span class="pill fa">F.A.</span>`:`<span class="pill dr">In Cadre</span>`;
       const lvl=o.pay_level!=null?`<span class="pill lvl">L${o.pay_level}${o.level_basis?'<sup title="'+o.level_basis+'">?</sup>':''}</span>`:"—";
       const inferred=o.basis&&o.basis.startsWith("inferred");
       const cityCell=o.city?`${o.city}<div class="basis ${inferred?'infer':''}">${inferred?'inferred · '+o.basis.split(':')[1]:o.basis}</div>`:`<span style="color:var(--faint)">—</span>`;
@@ -1370,11 +1434,13 @@ async function render(){
       tr.innerHTML=`<td class="name">${esc(o.name)}</td>
         <td class="mono">${o.cadre?titleCase(o.cadre):"—"}</td>
         <td>${lvl}</td><td>${stat}</td>
+        <td class="mono">${o.cd_since||"—"}</td>
         <td>${cityCell}</td>
         <td class="mono">${o.dob||"—"}</td>
         <td class="mono">${o.dor||"—"}</td>
         <td class="mono">${o.batch_year||"—"}</td>
         <td>${srcCell}</td>
+        <td class="mono" style="max-width:180px">${o.education?esc(o.education):"—"}</td>
         <td class="mono">${o.page}</td>
         <td class="postcell">${esc(trim(o.posting,90))}</td>`;
       tr.addEventListener("click",()=>toggle(o,tr));
@@ -1397,8 +1463,8 @@ function toggle(o,tr){
   document.querySelectorAll("tr.open").forEach(r=>r.classList.remove("open"));
   tr.classList.add("open"); OPENID=id;
   const d=document.createElement("tr"); d.className="detail";
-  d.innerHTML=`<td colspan="11"><div class="full">${esc(o.posting||"(no posting text captured)")}</div>
-    <div class="meta">Cadre <b>${o.cadre?titleCase(o.cadre):"—"}</b> · Batch <b>${o.batch_year||"—"}</b> · DOB <b>${o.dob||"—"}</b> · Retires <b>${o.dor||"—"}</b> · Source <b>${o.source||"—"}</b>${o.source_basis?' <span class="basis infer">'+o.source_basis+'</span>':''} · Level basis <span class="mono">${o.level_basis||"extracted"}</span> · ID <span class="mono">${o.idcode||"—"}</span> · Civil List page <b>${o.page}</b> · location basis <span class="mono">${o.basis}</span></div></td>`;
+  d.innerHTML=`<td colspan="13"><div class="full">${esc(o.posting||"(no posting text captured)")}</div>
+    <div class="meta">Cadre <b>${o.cadre?titleCase(o.cadre):"—"}</b> · Batch <b>${o.batch_year||"—"}</b> · DOB <b>${o.dob||"—"}</b> · Retires <b>${o.dor||"—"}</b> · Source <b>${o.source||"—"}</b>${o.source_basis?' <span class="basis infer">'+o.source_basis+'</span>':''} · On CD since <b>${o.cd_since||"—"}</b> · Education <b>${o.education?esc(o.education):"—"}</b> · Level basis <span class="mono">${o.level_basis||"extracted"}</span> · ID <span class="mono">${o.idcode||"—"}</span> · Civil List page <b>${o.page}</b> · location basis <span class="mono">${o.basis}</span></div></td>`;
   tr.after(d);
 }
 const esc=s=>(s||"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -1407,8 +1473,8 @@ const trim=(s,n)=>s&&s.length>n?s.slice(0,n)+"…":s||"";
 /* CSV export of current view */
 function exportCsv(){
   const rows=sortRows(applyFilters());
-  const cols=["name","cadre","batch_year","dob","dor","source","pay_level","status","city","basis","page","idcode","posting"];
-  const head=["Name","Cadre","Batch","Date of Birth","Date of Retirement","Source","Level","Status","City","Location basis","Page","ID","Posting (OCR)"];
+  const cols=["name","cadre","batch_year","dob","dor","source","education","pay_level","status","cd_since","city","basis","page","idcode","posting"];
+  const head=["Name","Cadre","Batch","Date of Birth","Date of Retirement","Source","Education","Level","Deputation Status","On CD Since","City","Location basis","Page","ID","Posting"];
   const q=v=>'"'+String(v==null?"":v).replace(/"/g,'""')+'"';
   const csv=[head.map(q).join(",")].concat(rows.map(o=>cols.map(c=>q(o[c])).join(","))).join("\r\n");
   const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"});
